@@ -6,11 +6,13 @@ command resumes where it stopped. `from_stage` discards that stage's output and 
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import re
 import time
 import uuid
+from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -58,10 +60,25 @@ def reset_from(d: Path, stage: str) -> None:
             (d / name).unlink(missing_ok=True)
 
 
+@contextmanager
+def render_lock(cfg: Config):
+    """One episode at a time: TTS saturates the CPU, and publishing rewrites the shared catalog."""
+    cfg.home.mkdir(parents=True, exist_ok=True)
+    with open(cfg.home / ".render.lock", "w") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
+
+
 def run(cfg: Config, d: Path, *, target: str | None = None, use_llm: bool = True,
         voice: str | None = None, publish: bool = True, log=print) -> dict:
+    if not (d / "status.json").exists():
+        set_status(d, "queued")
     try:
-        return _run(cfg, d, target=target, use_llm=use_llm, voice=voice, publish=publish, log=log)
+        with render_lock(cfg):
+            return _run(cfg, d, target=target, use_llm=use_llm, voice=voice, publish=publish, log=log)
     except Exception as e:
         set_status(d, "failed", error=str(e))
         raise

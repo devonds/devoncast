@@ -1,0 +1,20 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "devoncast-mcp",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "account_id": "8145a067bb67da1fd30f9ffbc9ed70a2",
+  "workers_dev": false,
+  "routes": [{ "pattern": "devoncast-mcp.polyculture.net", "custom_domain": true }],
+  "observability": { "enabled": true },
+  "d1_databases": [
+    { "binding": "DB", "database_name": "devoncast-jobs", "database_id": "944573c3-640c-421c-9c21-cd4d88cec1d2" }
+  ],
+  "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "devoncast" }],
+  "vars": {
+    "PUBLIC_BASE_URL": "https://devoncast.polyculture.net",
+    "HOSTNAME": "devoncast-mcp.polyculture.net"
+  }
+  // Secrets (wrangler secret put): MCP_PATH_SECRET, WORKER_TOKEN, FEED_PREFIX
+}

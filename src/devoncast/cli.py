@@ -44,6 +44,11 @@ def main(argv: list[str] | None = None) -> None:
     voices.add_argument("--out", default="~/devoncast/voice-samples")
 
     sub.add_parser("mcp", help="run the MCP server over stdio")
+    sub.add_parser("inbox", help="turn every file in the Inbox folder into an episode")
+    sub.add_parser("poll", help="render jobs queued through the remote MCP server")
+    inst = sub.add_parser("install", help="set up the Inbox folder, launchd agents and Finder Quick Action")
+    inst.add_argument("--no-poll", action="store_true", help="skip the remote-queue poller")
+    sub.add_parser("uninstall", help="remove the launchd agents and Quick Action")
 
     args = parser.parse_args(argv)
     handler = globals()[f"cmd_{args.cmd.replace('-', '_')}"]
@@ -154,6 +159,32 @@ def cmd_mcp(args) -> None:
     from .mcp_server import serve
 
     serve()
+
+
+def cmd_inbox(args) -> None:
+    from . import inbox
+
+    inbox.process(config_mod.load())
+
+
+def cmd_poll(args) -> None:
+    from . import remote
+
+    remote.poll(config_mod.load())
+
+
+def cmd_install(args) -> None:
+    from . import install
+
+    for line in install.install(config_mod.load(), poll=not args.no_poll):
+        print(f"installed {line}")
+
+
+def cmd_uninstall(args) -> None:
+    from . import install
+
+    install.uninstall()
+    print("removed launchd agents and Quick Action")
 
 
 if __name__ == "__main__":

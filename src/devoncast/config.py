@@ -40,6 +40,10 @@ public_base_url = "https://devoncast.polyculture.net"
 prefix = "{prefix}"          # unguessable path segment; changing it moves the feed URL
 # Credentials are read from the macOS Keychain (service "devoncast", accounts
 # "r2_access_key_id" and "r2_secret_access_key"). Setting them here overrides the Keychain.
+
+[remote]
+# Job queue behind the remote MCP server. The bearer token is the "worker_token" Keychain item.
+api_url = "https://devoncast-mcp.polyculture.net"
 """
 
 
@@ -50,6 +54,7 @@ class Config:
     tts: dict
     llm: dict
     r2: dict
+    remote: dict
 
     @property
     def episodes_dir(self) -> Path:
@@ -73,7 +78,7 @@ def load() -> Config:
         r2[field] = (
             os.environ.get(f"DEVONCAST_R2_{field.upper()}")
             or r2.get(field)
-            or _keychain(f"r2_{field}")
+            or keychain(f"r2_{field}")
         )
     return Config(
         home=Path(data.get("home", "~/devoncast")).expanduser(),
@@ -81,13 +86,14 @@ def load() -> Config:
         tts=data.get("tts", {}),
         llm=data.get("llm", {}),
         r2=r2,
+        remote=data.get("remote", {}),
     )
 
 
 KEYCHAIN_SERVICE = "devoncast"
 
 
-def _keychain(account: str) -> str:
+def keychain(account: str) -> str:
     """Read a secret stored with `security add-generic-password -s devoncast -a <account> -w`."""
     try:
         out = subprocess.run(
