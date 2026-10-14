@@ -1,0 +1,31 @@
+[project]
+name = "devoncast"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Devon Sampson", email = "devonds@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "boto3>=1.43.113",
+    "en-core-web-sm",
+    "feedgen>=1.0.0",
+    "kokoro>=0.9.4",
+    "markdown-it-py>=4.2.0",
+    "mcp[cli]>=2.3.0",
+    "numpy>=2.5.4",
+    "pillow>=12.3.0",
+    "soundfile>=0.14.0",
+    "trafilatura>=2.3.1",
+]
+
+[project.scripts]
+devoncast = "devoncast:main"
+
+[build-system]
+requires = ["uv_build>=0.12.1,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.sources]
+en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" }
