@@ -25,7 +25,7 @@ server = MCPServer(
         "something you wrote or can see in the conversation (an artifact, a document, notes), "
         "write the speech script yourself following the add_episode guidelines and call "
         "add_episode. When given a file path or URL you cannot read, call add_document. "
-        "Episodes take a few minutes to render; use episode_status to check on them."
+        "Rendering takes about as long as the audio itself; use episode_status to check on it."
     ),
 )
 
@@ -57,13 +57,15 @@ def add_episode(title: str, script: str, summary: str, show_notes: str = "",
                                       voice=voice, origin={"kind": "mcp"})
     _start_work(cfg)
     words = len(script.split())
-    return (f"Queued '{title}' ({words} words, about {words // 150} minutes of audio). "
-            f"Episode id: {d.name}. Rendering usually takes a quarter to a half of the audio length.")
+    minutes = max(1, round(words / 150))
+    return (f"Queued '{title}' ({words} words, about {minutes} minutes of audio). Episode id: {d.name}. "
+            f"Rendering takes about as long as the audio, so expect it in the feed in about {minutes} minutes.")
 
 
 @server.tool(description="Add an episode from a local file path or a web URL. The document is "
              "extracted, rewritten for listening by Claude Code, rendered and published. Use this "
-             "when you cannot see the document's text yourself. Returns immediately.")
+             "when you cannot see the document's text yourself. Returns immediately; rendering takes "
+             "about as long as the audio, roughly a minute per 150 words.")
 def add_document(path_or_url: str, voice: str | None = None) -> str:
     cfg = config_mod.load()
     is_url = path_or_url.startswith(("http://", "https://"))

@@ -53,7 +53,8 @@ function createServer(env: Env) {
 					"you wrote or can see in the conversation (an artifact, document, notes, an article you " +
 					"read), write the speech script yourself following the add_episode guidelines and call " +
 					"add_episode. To add a web page you have not read, call add_url. Jobs render on Devon's " +
-					"Mac, usually within a few minutes; check them with job_status.",
+					"Mac, which picks them up within a minute when it is awake. Rendering takes about as long " +
+					"as the audio itself; check progress with job_status.",
 			},
 		);
 
@@ -76,9 +77,11 @@ function createServer(env: Env) {
 			async (args) => {
 				const id = await enqueue(env, "script", args);
 				const words = args.script.split(/\s+/).length;
+				const minutes = Math.max(1, Math.round(words / 150));
 				return text(
-					`Queued "${args.title}" (${words} words, about ${Math.round(words / 150)} minutes of audio). ` +
-						`Job id: ${id}. Devon's Mac picks up jobs within a minute when it is awake.`,
+					`Queued "${args.title}" (${words} words, about ${minutes} minutes of audio). Job id: ${id}. ` +
+						"Devon's Mac picks up jobs within a minute when it is awake. Rendering takes about as long " +
+						`as the audio, so expect it in the feed about ${minutes} minutes after that.`,
 				);
 			},
 		);
@@ -91,7 +94,12 @@ function createServer(env: Env) {
 					`listening and renders it. Use add_episode instead when you already have the text. \`voice\` is optional: ${VOICES}.`,
 				inputSchema: z.object({ url: z.string().url(), voice: z.string().optional() }),
 			},
-			async (args) => text(`Queued ${args.url}. Job id: ${await enqueue(env, "url", args)}.`),
+			async (args) =>
+				text(
+					`Queued ${args.url}. Job id: ${await enqueue(env, "url", args)}. Devon's Mac picks up jobs within ` +
+						"a minute when it is awake, takes a minute or two to rewrite the article, then renders it in " +
+						"about as long as the audio runs (roughly a minute per 150 words).",
+				),
 		);
 
 		server.registerTool(
