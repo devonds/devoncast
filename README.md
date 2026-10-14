@@ -12,8 +12,15 @@ uv run devoncast init        # writes ~/.config/devoncast/config.toml
 ```
 
 Create a bucket-scoped R2 token (Cloudflare dashboard → R2 → Manage API tokens → Create Account
-API token → Object Read & Write, applied to the `devoncast` bucket only). Put its Access Key ID and
-Secret Access Key in `~/.config/devoncast/config.toml`, then run `uv run devoncast init` again.
+API token → Object Read & Write, applied to the `devoncast` bucket only) and store it in the
+Keychain (each command prompts for the value):
+
+```sh
+security add-generic-password -s devoncast -a r2_access_key_id -w
+security add-generic-password -s devoncast -a r2_secret_access_key -w
+```
+
+Then run `uv run devoncast init` again.
 It uploads the cover art and an empty feed and prints the feed URL to subscribe to.
 
 The rewrite step uses `claude -p`, so Claude Code must be installed and logged in with your Claude

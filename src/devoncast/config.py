@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import secrets
+import subprocess
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,8 +38,8 @@ account_id = "{account_id}"
 bucket = "devoncast"
 public_base_url = "https://devoncast.polyculture.net"
 prefix = "{prefix}"          # unguessable path segment; changing it moves the feed URL
-access_key_id = ""
-secret_access_key = ""
+# Credentials are read from the macOS Keychain (service "devoncast", accounts
+# "r2_access_key_id" and "r2_secret_access_key"). Setting them here overrides the Keychain.
 """
 
 
@@ -68,10 +69,12 @@ def load() -> Config:
         raise SystemExit(f"No config at {CONFIG_PATH}. Run `devoncast init` first.")
     data = tomllib.loads(CONFIG_PATH.read_text())
     r2 = data.get("r2", {})
-    r2["access_key_id"] = os.environ.get("DEVONCAST_R2_ACCESS_KEY_ID", r2.get("access_key_id", ""))
-    r2["secret_access_key"] = os.environ.get(
-        "DEVONCAST_R2_SECRET_ACCESS_KEY", r2.get("secret_access_key", "")
-    )
+    for field in ("access_key_id", "secret_access_key"):
+        r2[field] = (
+            os.environ.get(f"DEVONCAST_R2_{field.upper()}")
+            or r2.get(field)
+            or _keychain(f"r2_{field}")
+        )
     return Config(
         home=Path(data.get("home", "~/devoncast")).expanduser(),
         podcast=data.get("podcast", {}),
@@ -79,6 +82,21 @@ def load() -> Config:
         llm=data.get("llm", {}),
         r2=r2,
     )
+
+
+KEYCHAIN_SERVICE = "devoncast"
+
+
+def _keychain(account: str) -> str:
+    """Read a secret stored with `security add-generic-password -s devoncast -a <account> -w`."""
+    try:
+        out = subprocess.run(
+            ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", account, "-w"],
+            capture_output=True, text=True,
+        )
+    except FileNotFoundError:
+        return ""
+    return out.stdout.strip() if out.returncode == 0 else ""
 
 
 def write_template(account_id: str = "") -> Path:
