@@ -40,8 +40,9 @@ def install(cfg: Config, poll: bool = True) -> list[str]:
     logs.mkdir(parents=True, exist_ok=True)
 
     done = []
-    _agent(INBOX_LABEL, [exe, "inbox"], logs / "inbox.log", WatchPaths=[str(inbox)])
-    done.append(f"launchd agent {INBOX_LABEL} watching {inbox}")
+    # The interval runs retries when they come due, even with nothing new in the Inbox.
+    _agent(INBOX_LABEL, [exe, "inbox"], logs / "inbox.log", WatchPaths=[str(inbox)], StartInterval=300)
+    done.append(f"launchd agent {INBOX_LABEL} watching {inbox} and retrying failures")
     if poll:
         _agent(POLL_LABEL, [exe, "poll"], logs / "poll.log", StartInterval=60)
         done.append(f"launchd agent {POLL_LABEL} polling the remote queue every minute")

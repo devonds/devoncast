@@ -97,7 +97,10 @@ function createServer(env: Env) {
 		server.registerTool(
 			"job_status",
 			{
-				description: "Status of a queued job: queued, claimed, rendering, published or failed.",
+				description:
+					"Status of a job: queued (waiting for the Mac), claimed, accepted (on the Mac, waiting its turn), " +
+					"rendering, retrying (an attempt failed; the Mac tries again on its own, error says when), " +
+					"published or failed. Use retry_job on a failed job.",
 				inputSchema: z.object({ job_id: z.string() }),
 				annotations: { readOnlyHint: true },
 			},
@@ -147,6 +150,29 @@ function createServer(env: Env) {
 		);
 
 		server.registerTool(
+			"retry_job",
+			{
+				description:
+					"Retry a failed job. The Mac resumes from the last stage that finished, so a script that " +
+					"was already written is not rewritten.",
+				inputSchema: z.object({ job_id: z.string() }),
+			},
+			async ({ job_id }) => {
+				const { meta } = await env.DB.prepare(
+					`UPDATE jobs SET status = 'queued', attempts = 0, error = NULL, updated_at = datetime('now')
+					 WHERE id = ? AND status IN ('failed', 'retrying')`,
+				)
+					.bind(job_id)
+					.run();
+				return text(
+					meta.changes
+						? `Requeued job ${job_id}. Devon's Mac picks it up within a minute when it is awake.`
+						: `Job ${job_id} is not failed or retrying, so there is nothing to retry.`,
+				);
+			},
+		);
+
+		server.registerTool(
 			"feed_url",
 			{
 				description: "The podcast feed URL to subscribe to.",
@@ -171,26 +197,37 @@ async function enqueue(env: Env, kind: string, payload: Record<string, unknown>)
 
 // --- Job API for the Mac poller -------------------------------------------------------
 
-const STALE_CLAIM_MINUTES = 90; // a claimed job with no update for this long is handed out again
+// The Mac confirms a claim within seconds by reporting the job's episode id ("accepted"). After
+// that it owns the job durably and retries failures itself, so only unconfirmed claims, where the
+// claim response was lost, are handed out again.
+const STALE_CLAIM_MINUTES = 10;
+const MAX_CLAIMS = 3;
 
 async function claim(env: Env): Promise<Response> {
-	const job = await env.DB.prepare(
-		`UPDATE jobs SET status = 'claimed', attempts = attempts + 1, updated_at = datetime('now')
-		 WHERE id = (
-		   SELECT id FROM jobs
-		   WHERE (status = 'queued' OR (status IN ('claimed', 'rendering')
-		          AND updated_at < datetime('now', '-${STALE_CLAIM_MINUTES} minutes')))
-		     AND attempts < 3
-		   ORDER BY created_at LIMIT 1)
-		 RETURNING id, kind, payload`,
-	).first<{ id: string; kind: string; payload: string }>();
+	const stale = `status = 'claimed' AND updated_at < datetime('now', '-${STALE_CLAIM_MINUTES} minutes')`;
+	const [, claimed] = await env.DB.batch<{ id: string; kind: string; payload: string; episode_id: string | null }>([
+		env.DB.prepare(
+			`UPDATE jobs SET status = 'failed', updated_at = datetime('now'),
+			 error = 'Claimed ${MAX_CLAIMS} times but the Mac never confirmed it'
+			 WHERE ${stale} AND attempts >= ${MAX_CLAIMS}`,
+		),
+		env.DB.prepare(
+			`UPDATE jobs SET status = 'claimed', attempts = attempts + 1, updated_at = datetime('now')
+			 WHERE id = (
+			   SELECT id FROM jobs
+			   WHERE status = 'queued' OR (${stale} AND attempts < ${MAX_CLAIMS})
+			   ORDER BY created_at LIMIT 1)
+			 RETURNING id, kind, payload, episode_id`,
+		),
+	]);
+	const job = claimed.results[0];
 	if (!job) return new Response(null, { status: 204 });
 	return Response.json({ ...job, payload: JSON.parse(job.payload) });
 }
 
 async function update(env: Env, id: string, request: Request): Promise<Response> {
 	const body = (await request.json()) as Record<string, string | undefined>;
-	const allowed = ["claimed", "rendering", "published", "failed"];
+	const allowed = ["accepted", "rendering", "retrying", "published", "failed"];
 	if (!body.status || !allowed.includes(body.status)) return new Response("bad status", { status: 400 });
 	await env.DB.prepare(
 		`UPDATE jobs SET status = ?, episode_id = COALESCE(?, episode_id), title = COALESCE(?, title),

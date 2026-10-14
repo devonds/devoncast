@@ -1,19 +1,20 @@
 """Drop-folder intake: every file put in <home>/Inbox becomes an episode.
 
-launchd runs `devoncast inbox` whenever the folder changes. Files move to processing/ while they
-render, then to done/ or failed/. A .webloc (a URL dragged from a browser) adds that web page.
+launchd runs `devoncast inbox` whenever the folder changes, and every few minutes so retries come
+due. A file moves to processing/ while its episode renders (and while it waits to retry), then to
+done/ or failed/. A .webloc (a URL dragged from a browser) adds that web page.
 """
 
 from __future__ import annotations
 
 import plistlib
 import shutil
-import subprocess
 import time
 from pathlib import Path
 
-from . import pipeline
+from . import pipeline, work
 from .config import Config
+from .notify import notify
 
 SUPPORTED = {".md", ".markdown", ".txt", ".html", ".htm", ".docx", ".rtf", ".odt", ".epub", ".webloc"}
 
@@ -26,36 +27,58 @@ def process(cfg: Config) -> None:
     inbox = inbox_dir(cfg)
     for sub in ("processing", "done", "failed"):
         (inbox / sub).mkdir(parents=True, exist_ok=True)
-    while True:
-        files = sorted(p for p in inbox.iterdir() if p.is_file() and not p.name.startswith("."))
-        if not files:
-            return
+    for path in _orphans(cfg, inbox):
+        accept(cfg, path, inbox)
+    while files := sorted(p for p in inbox.iterdir() if p.is_file() and not p.name.startswith(".")):
         for path in files:
             if path.suffix.lower() not in SUPPORTED:
                 _move(path, inbox / "failed")
                 notify("Devoncast", f"Skipped {path.name}: unsupported file type")
-                continue
-            if not _settled(path):
-                continue  # still being copied; the next folder change will pick it up
-            working = _move(path, inbox / "processing")
-            add_one(cfg, working, inbox)
+            elif _settled(path):  # otherwise still being copied; the next pass picks it up
+                accept(cfg, _move(path, inbox / "processing"), inbox)
+    work.work(cfg)
 
 
-def add_one(cfg: Config, working: Path, inbox: Path) -> None:
-    target = webloc_url(working) if working.suffix.lower() == ".webloc" else str(working)
-    d = pipeline.new_episode_dir(cfg, working.stem)
+def accept(cfg: Config, path: Path, inbox: Path) -> None:
+    """Create a queued episode for a file in processing/."""
+    target = webloc_url(path) if path.suffix.lower() == ".webloc" else str(path)
     try:
-        meta = pipeline.run(cfg, d, target=target)
-    except Exception as e:  # noqa: BLE001 - report every failure, keep processing the rest
-        _move(working, inbox / "failed")
-        notify("Devoncast failed", f"{working.name}: {e}")
+        pipeline.create_episode(cfg, path.stem, target=target, origin={"kind": "inbox", "file": path.name})
+    except Exception as e:  # noqa: BLE001 - report it and keep going with the other files
+        _move(path, inbox / "failed")
+        notify("Devoncast failed", f"{path.name}: {e}")
+
+
+def episode_changed(cfg: Config, d: Path) -> None:
+    """Move the episode's Inbox file to done/ or failed/ once the episode is finished."""
+    st = pipeline.status(d)
+    if st.get("stage") in pipeline.FINISHED:
+        dest = "done"
+    elif st.get("stage") == "failed" and "retry_at" not in st:
+        dest = "failed"
+    else:
         return
-    _move(working, inbox / "done")
-    notify("New Devoncast episode", meta["title"])
+    inbox = inbox_dir(cfg)
+    name = pipeline.request(d)["origin"]["file"]
+    for sub in ("processing", "failed"):  # failed/ too: a manual retry can succeed
+        if (inbox / sub / name).exists() and sub != dest:
+            _move(inbox / sub / name, inbox / dest)
+            return
 
 
 def webloc_url(path: Path) -> str:
     return plistlib.loads(path.read_bytes())["URL"]
+
+
+def _orphans(cfg: Config, inbox: Path) -> list[Path]:
+    """Files in processing/ with no episode, left by a crash between moving and accepting."""
+    claimed = {
+        o.get("file")
+        for d in cfg.episodes_dir.glob("*")
+        if (o := pipeline.request(d).get("origin", {})).get("kind") == "inbox"
+    } if cfg.episodes_dir.exists() else set()
+    return [p for p in sorted((inbox / "processing").iterdir())
+            if p.is_file() and not p.name.startswith(".") and p.name not in claimed]
 
 
 def _settled(path: Path, wait: float = 1.0) -> bool:
@@ -70,12 +93,3 @@ def _move(path: Path, dest_dir: Path) -> Path:
         dest = dest_dir / f"{path.stem}-{int(time.time())}{path.suffix}"
     shutil.move(path, dest)
     return dest
-
-
-def notify(title: str, message: str) -> None:
-    script = f"display notification {_applescript_str(message)} with title {_applescript_str(title)}"
-    subprocess.run(["osascript", "-e", script], capture_output=True)
-
-
-def _applescript_str(s: str) -> str:
-    return '"' + s.replace("\\", "\\\\").replace('"', '\\"')[:200] + '"'

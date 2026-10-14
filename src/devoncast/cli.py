@@ -21,13 +21,15 @@ def main(argv: list[str] | None = None) -> None:
 
     add = sub.add_parser("add", help="add a file or URL as a new episode")
     add.add_argument("target", help="path to .md/.txt/.html/.docx, or an http(s) URL")
-    add.add_argument("--episode-dir", help=argparse.SUPPRESS)
     _render_args(add)
 
     redo = sub.add_parser("redo", help="rerun an existing episode from a stage")
     redo.add_argument("episode", help="episode directory or part of its name")
     redo.add_argument("--from", dest="from_stage", choices=pipeline.STAGES, default="synthesize")
     _render_args(redo)
+
+    retry = sub.add_parser("retry", help="retry a failed episode now, resuming where it stopped")
+    retry.add_argument("episode", help="episode directory or part of its name")
 
     sub.add_parser("list", help="list published episodes")
     rm = sub.add_parser("remove", help="remove an episode from the feed and delete its audio")
@@ -46,6 +48,7 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("mcp", help="run the MCP server over stdio")
     sub.add_parser("inbox", help="turn every file in the Inbox folder into an episode")
     sub.add_parser("poll", help="render jobs queued through the remote MCP server")
+    sub.add_parser("work", help="render every queued episode and every failed one that is due to retry")
     inst = sub.add_parser("install", help="set up the Inbox folder, launchd agents and Finder Quick Action")
     inst.add_argument("--no-poll", action="store_true", help="skip the remote-queue poller")
     sub.add_parser("uninstall", help="remove the launchd agents and Quick Action")
@@ -76,7 +79,8 @@ def cmd_init(args) -> None:
     if not cover_path.exists():
         cover.make_cover(cover_path, cfg.podcast.get("title", "Devoncast"))
     store.put_file(feed.COVER, cover_path, "image/png", cache=SHORT_CACHE)
-    url = feed.save_and_publish(store, cfg, feed.load_catalog(store))
+    with pipeline.catalog_lock(cfg):
+        url = feed.save_and_publish(store, cfg, feed.load_catalog(store))
     print(f"Feed published. Subscribe to:\n  {url}")
 
 
@@ -85,12 +89,16 @@ def cmd_add(args) -> None:
     name = args.target
     if not name.startswith(("http://", "https://")):
         path = Path(name).expanduser()
-        if not path.exists():
+        if not path.is_file():
             sys.exit(f"No such file: {path}")
         name = path.stem
-    d = Path(args.episode_dir) if args.episode_dir else pipeline.new_episode_dir(cfg, name)
+    d = pipeline.create_episode(cfg, name, target=args.target, voice=args.voice,
+                                use_llm=not args.no_llm, publish=not args.no_publish)
     print(f"episode dir: {d}")
-    pipeline.run(cfg, d, target=args.target, use_llm=not args.no_llm, voice=args.voice, publish=not args.no_publish)
+    try:
+        pipeline.run(cfg, d)
+    except Exception as e:  # noqa: BLE001
+        sys.exit(f"failed: {e}\nFix the cause, then: devoncast retry {d.name}")
     _print_done(cfg, d, args.no_publish)
 
 
@@ -98,8 +106,26 @@ def cmd_redo(args) -> None:
     cfg = config_mod.load()
     d = pipeline.find_episode_dir(cfg, args.episode)
     pipeline.reset_from(d, args.from_stage)
+    pipeline.set_status(d, "queued", attempts=0)
     pipeline.run(cfg, d, use_llm=not args.no_llm, voice=args.voice, publish=not args.no_publish)
     _print_done(cfg, d, args.no_publish)
+
+
+def cmd_retry(args) -> None:
+    from . import work
+
+    cfg = config_mod.load()
+    d = pipeline.find_episode_dir(cfg, args.episode)
+    work.requeue(d)
+    if not work.work(cfg):
+        print("another render is running; this episode will run after it")
+    print(f"{d.name}: {work.describe(d)}")
+
+
+def cmd_work(args) -> None:
+    from . import work
+
+    work.work(config_mod.load())
 
 
 def _print_done(cfg, d: Path, local_only: bool) -> None:
@@ -128,7 +154,8 @@ def cmd_rebuild_feed(args) -> None:
 
     cfg = config_mod.load()
     store = Store(cfg)
-    print(feed.save_and_publish(store, cfg, feed.load_catalog(store)))
+    with pipeline.catalog_lock(cfg):
+        print(feed.save_and_publish(store, cfg, feed.load_catalog(store)))
 
 
 def cmd_feed_url(args) -> None:
@@ -137,10 +164,11 @@ def cmd_feed_url(args) -> None:
 
 def cmd_status(args) -> None:
     cfg = config_mod.load()
-    dirs = [pipeline.find_episode_dir(cfg, args.episode)] if args.episode else sorted(cfg.episodes_dir.iterdir())[-10:]
+    dirs = [pipeline.find_episode_dir(cfg, args.episode)] if args.episode else sorted(cfg.episodes_dir.glob("*"))[-10:]
+    from . import work
+
     for d in dirs:
-        status = d / "status.json"
-        print(f"{d.name}: {status.read_text() if status.exists() else 'no status'}")
+        print(f"{d.name}: {work.describe(d)}")
 
 
 def cmd_voices(args) -> None:
