@@ -26,9 +26,10 @@ on a walk or in the car. Rules:
 - Turn bullet lists, tables, and fragments into full spoken sentences. Say "first", "second",
   "and finally" where order matters.
 - Write numbers, symbols and abbreviations as they should be spoken: "about three hundred",
-  "thirty percent", "versus", "for example". Spell out acronyms a reader would say letter by
-  letter with spaces or hyphens only if ambiguous ("P R A U C"); keep words like "SaaS" that are
-  said as words. Prefer the expanded form on first use.
+  "thirty percent", "versus", "for example". Write acronyms that are said letter by letter in
+  plain capitals with no spaces or periods (AI, CRM, ROC AUC, DBT); the speech engine spells
+  them out. Never write single letters separated by spaces. Keep words said as words ("SaaS").
+  Prefer the expanded form on first use.
 - Short sentences. No parentheses, no emoji, no markdown other than the "# " chapter lines.
 - Address the listener as "you" if the document does.
 """
