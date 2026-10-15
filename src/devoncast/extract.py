@@ -8,6 +8,8 @@ from pathlib import Path
 
 import trafilatura
 
+from .errors import PermanentError
+
 
 @dataclass
 class Source:
@@ -16,10 +18,16 @@ class Source:
     url: str | None = None
 
 
+def is_url(target: str) -> bool:
+    return target.startswith(("http://", "https://"))
+
+
 def extract(target: str) -> Source:
-    if target.startswith(("http://", "https://")):
+    if is_url(target):
         return _from_url(target)
     path = Path(target).expanduser()
+    if not path.is_file():
+        raise PermanentError(f"No such file: {path}")
     suffix = path.suffix.lower()
     if suffix in {".md", ".markdown", ".txt", ""}:
         return Source(path.read_text(), path.stem)
@@ -27,7 +35,7 @@ def extract(target: str) -> Source:
         return Source(_html_to_markdown(path.read_text()), path.stem)
     if suffix in {".docx", ".rtf", ".odt", ".epub"}:
         return Source(_pandoc(path), path.stem)
-    raise ValueError(f"Unsupported file type: {suffix}")
+    raise PermanentError(f"Unsupported file type: {suffix}")
 
 
 def _from_url(url: str) -> Source:
@@ -43,7 +51,7 @@ def _from_url(url: str) -> Source:
 def _html_to_markdown(html: str) -> str:
     text = trafilatura.extract(html, output_format="markdown", include_links=False, include_images=False)
     if not text:
-        raise RuntimeError("No readable article text found")
+        raise PermanentError("No readable article text found")
     return text
 
 
@@ -53,5 +61,5 @@ def _pandoc(path: Path) -> str:
             ["pandoc", str(path), "-t", "gfm", "--wrap=none"], capture_output=True, text=True, check=True
         )
     except FileNotFoundError:
-        raise RuntimeError(f"Converting {path.suffix} needs pandoc: brew install pandoc") from None
+        raise PermanentError(f"Converting {path.suffix} needs pandoc: brew install pandoc") from None
     return out.stdout

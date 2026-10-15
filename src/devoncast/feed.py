@@ -25,8 +25,11 @@ def load_catalog(store: Store) -> list[dict]:
 
 def save_and_publish(store: Store, cfg: Config, episodes: list[dict]) -> str:
     episodes.sort(key=lambda e: e["pub_date"])
+    # Feed first: if it fails, the catalog still describes what listeners see, so a retry knows
+    # which old audio file to clean up.
+    url = store.put_bytes(FEED, build_feed(cfg, episodes), "application/rss+xml; charset=utf-8")
     store.put_bytes(CATALOG, json.dumps(episodes, indent=2).encode(), "application/json")
-    return store.put_bytes(FEED, build_feed(cfg, episodes), "application/rss+xml; charset=utf-8")
+    return url
 
 
 def build_feed(cfg: Config, episodes: list[dict]) -> bytes:

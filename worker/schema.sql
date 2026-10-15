@@ -3,7 +3,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   kind TEXT NOT NULL,              -- 'script' or 'url'
   payload TEXT NOT NULL,           -- JSON tool arguments
   title TEXT,
-  status TEXT NOT NULL DEFAULT 'queued',  -- queued, claimed, rendering, published, failed
+  status TEXT NOT NULL DEFAULT 'queued',  -- queued, claimed, accepted, rendering, retrying, published, failed
   episode_id TEXT,
   error TEXT,
   attempts INTEGER NOT NULL DEFAULT 0,

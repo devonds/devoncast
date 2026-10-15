@@ -1,11 +1,11 @@
 """MCP server (stdio) so Claude Desktop or Claude Code can add episodes.
 
-Rendering takes minutes, so add tools start a detached `devoncast` process and return at once.
+Rendering takes minutes, so add tools create a queued episode, start a detached `devoncast work`
+process and return at once.
 """
 
 from __future__ import annotations
 
-import json
 import subprocess
 import sys
 from pathlib import Path
@@ -14,7 +14,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
 
 from . import config as config_mod
-from . import feed, pipeline
+from . import feed, pipeline, work
 from .script import SCRIPT_GUIDE
 from .storage import Store
 
@@ -25,16 +25,19 @@ server = MCPServer(
         "something you wrote or can see in the conversation (an artifact, a document, notes), "
         "write the speech script yourself following the add_episode guidelines and call "
         "add_episode. When given a file path or URL you cannot read, call add_document. "
-        "Episodes take a few minutes to render; use episode_status to check on them."
+        "Rendering takes about as long as the audio itself; use episode_status to check on it."
     ),
 )
 
 
-def _spawn(d: Path, args: list[str]) -> None:
-    log = open(d / "log.txt", "a")
+def _start_work(cfg: config_mod.Config) -> None:
+    """Render queued episodes in the background. A no-op if another process is already rendering."""
+    logs = cfg.home / "logs"
+    logs.mkdir(parents=True, exist_ok=True)
     subprocess.Popen(
-        [sys.executable, "-m", "devoncast.cli", *args],
-        stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True,
+        [sys.executable, "-m", "devoncast.cli", "work"],
+        stdout=open(logs / "work.log", "a"), stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+        start_new_session=True,
     )
 
 
@@ -50,40 +53,49 @@ Returns immediately; the episode appears in the feed when rendering finishes."""
 def add_episode(title: str, script: str, summary: str, show_notes: str = "",
                 source_url: str | None = None, voice: str | None = None) -> str:
     cfg = config_mod.load()
-    d = pipeline.write_script_episode(cfg, title, script, summary, show_notes, source_url)
-    args = ["redo", str(d), "--from", "synthesize"] + (["--voice", voice] if voice else [])
-    _spawn(d, args)
+    d = pipeline.write_script_episode(cfg, title, script, summary, show_notes, source_url,
+                                      voice=voice, origin={"kind": "mcp"})
+    _start_work(cfg)
     words = len(script.split())
-    return (f"Queued '{title}' ({words} words, about {words // 150} minutes of audio). "
-            f"Episode id: {d.name}. Rendering usually takes a quarter to a half of the audio length.")
+    minutes = max(1, round(words / 150))
+    return (f"Queued '{title}' ({words} words, about {minutes} minutes of audio). Episode id: {d.name}. "
+            f"Rendering takes about as long as the audio, so expect it in the feed in about {minutes} minutes.")
 
 
 @server.tool(description="Add an episode from a local file path or a web URL. The document is "
              "extracted, rewritten for listening by Claude Code, rendered and published. Use this "
-             "when you cannot see the document's text yourself. Returns immediately.")
+             "when you cannot see the document's text yourself. Returns immediately; rendering takes "
+             "about as long as the audio, roughly a minute per 150 words.")
 def add_document(path_or_url: str, voice: str | None = None) -> str:
     cfg = config_mod.load()
     is_url = path_or_url.startswith(("http://", "https://"))
-    if not is_url and not Path(path_or_url).expanduser().exists():
+    if not is_url and not Path(path_or_url).expanduser().is_file():
         return f"No such file: {path_or_url}"
-    name = path_or_url if is_url else Path(path_or_url).stem
-    d = pipeline.new_episode_dir(cfg, name)
-    pipeline.set_status(d, "queued")
-    _spawn(d, ["add", path_or_url, "--episode-dir", str(d)] + (["--voice", voice] if voice else []))
+    name = path_or_url.split("://", 1)[-1] if is_url else Path(path_or_url).stem
+    d = pipeline.create_episode(cfg, name, target=path_or_url, voice=voice, origin={"kind": "mcp"})
+    _start_work(cfg)
     return f"Queued {path_or_url}. Episode id: {d.name}."
 
 
-@server.tool(description="Check rendering progress for an episode id returned by an add tool.",
+@server.tool(description="Check rendering progress for an episode id returned by an add tool. Failed "
+             "episodes retry on their own for several hours unless the failure is permanent.",
              annotations=ToolAnnotations(readOnlyHint=True))
 def episode_status(episode_id: str) -> str:
     d = pipeline.find_episode_dir(config_mod.load(), episode_id)
-    status = json.loads((d / "status.json").read_text()) if (d / "status.json").exists() else {}
-    if status.get("stage") == "failed":
-        tail = (d / "log.txt").read_text()[-1500:] if (d / "log.txt").exists() else ""
-        return f"Failed: {status.get('error')}\n{tail}"
-    if status.get("stage") == "synthesize" and status.get("total"):
-        return f"Synthesizing: {status['done']} of {status['total']} paragraphs"
-    return f"Stage: {status.get('stage', 'unknown')}"
+    line = work.describe(d)
+    if pipeline.status(d).get("stage") == "failed" and (d / "log.txt").exists():
+        line += "\n" + (d / "log.txt").read_text()[-1500:]
+    return line
+
+
+@server.tool(description="Retry a failed episode now, resuming from the last stage that finished. "
+             "Also works for an episode that is waiting to retry.")
+def retry_episode(episode_id: str) -> str:
+    cfg = config_mod.load()
+    d = pipeline.find_episode_dir(cfg, episode_id)
+    work.requeue(d)
+    _start_work(cfg)
+    return f"Retrying {d.name}."
 
 
 @server.tool(description="List published episodes, newest first.", annotations=ToolAnnotations(readOnlyHint=True))
